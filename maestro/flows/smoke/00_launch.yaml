@@ -1,0 +1,4 @@
+appId: com.flexbets.app
+---
+- launchApp
+- assertVisible: "Login"

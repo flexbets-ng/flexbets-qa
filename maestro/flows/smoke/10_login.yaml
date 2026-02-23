@@ -1,0 +1,9 @@
+appId: com.flexbets.app
+---
+- launchApp
+- tapOn: "Email"
+- inputText: ${TEST_EMAIL}
+- tapOn: "Password"
+- inputText: ${TEST_PASSWORD}
+- tapOn: "Sign in"
+- assertVisible: "Home"
