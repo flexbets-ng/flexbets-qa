@@ -1,0 +1,241 @@
+name: FlexBets QA — BrowserStack
+
+on:
+  # Run on every push to main/develop
+  push:
+    branches: [main, develop]
+  # Run on PRs
+  pull_request:
+    branches: [main, develop]
+  # Nightly regression at 2 AM UTC
+  schedule:
+    - cron: '0 2 * * *'
+  # Manual trigger with options
+  workflow_dispatch:
+    inputs:
+      test_suite:
+        description: 'Test suite to run'
+        required: true
+        default: 'smoke'
+        type: choice
+        options:
+          - smoke
+          - regression
+          - e2e
+          - all
+      platform:
+        description: 'Platform to test'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - android
+          - ios
+          - both
+
+env:
+  BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+  BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+  BROWSERSTACK_ANDROID_APP_URL: ${{ secrets.BROWSERSTACK_ANDROID_APP_URL }}
+  BROWSERSTACK_IOS_APP_URL: ${{ secrets.BROWSERSTACK_IOS_APP_URL }}
+  FLEXBETS_TEST_USER_EMAIL: ${{ secrets.FLEXBETS_TEST_USER_EMAIL }}
+  FLEXBETS_TEST_USER_PASSWORD: ${{ secrets.FLEXBETS_TEST_USER_PASSWORD }}
+  FLEXBETS_TEST_USER_PIN: ${{ secrets.FLEXBETS_TEST_USER_PIN }}
+  # Jira integration (flexbets.atlassian.net)
+  JIRA_BASE_URL: https://flexbets.atlassian.net
+  JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+  JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+  JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY || 'FLEX' }}
+  JIRA_AUTO_FILE_BUGS: 'true'
+  # MailSlurp (qa.flexbets.io)
+  MAILSLURP_API_KEY: ${{ secrets.MAILSLURP_API_KEY }}
+  TEST_ENV: staging
+
+jobs:
+  # ────────────────────────────────────────────────────────────────
+  # Upload latest app builds to BrowserStack
+  # ────────────────────────────────────────────────────────────────
+  upload-apps:
+    name: Upload App Builds
+    runs-on: ubuntu-latest
+    # Only upload on push to main (release builds)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # In practice, you'd download the APK/IPA from your build artifacts
+      - name: Download Android build
+        uses: actions/download-artifact@v4
+        with:
+          name: flexbets-android-staging
+          path: ./apps/
+
+      - name: Download iOS build
+        uses: actions/download-artifact@v4
+        with:
+          name: flexbets-ios-staging
+          path: ./apps/
+
+      - name: Upload Android app
+        run: npm run upload:app:android
+
+      - name: Upload iOS app
+        run: npm run upload:app:ios
+
+  # ────────────────────────────────────────────────────────────────
+  # Smoke Tests (runs on every PR and push)
+  # ────────────────────────────────────────────────────────────────
+  smoke-tests:
+    name: Smoke Tests
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'pull_request' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.test_suite == 'smoke' || github.event.inputs.test_suite == 'all'))
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [android, ios]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run smoke tests (${{ matrix.platform }})
+        run: npx wdio run config/wdio.${{ matrix.platform }}.bs.conf.ts --suite smoke
+
+      - name: Upload Allure results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results-smoke-${{ matrix.platform }}
+          path: allure-results/
+
+  # ────────────────────────────────────────────────────────────────
+  # Regression Tests (nightly + manual)
+  # ────────────────────────────────────────────────────────────────
+  regression-tests:
+    name: Regression Tests
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.test_suite == 'regression' || github.event.inputs.test_suite == 'all'))
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [android, ios]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run regression tests (${{ matrix.platform }})
+        run: npx wdio run config/wdio.${{ matrix.platform }}.bs.conf.ts --suite regression
+
+      - name: Upload Allure results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results-regression-${{ matrix.platform }}
+          path: allure-results/
+
+  # ────────────────────────────────────────────────────────────────
+  # E2E Tests (nightly + manual)
+  # ────────────────────────────────────────────────────────────────
+  e2e-tests:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.test_suite == 'e2e' || github.event.inputs.test_suite == 'all'))
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [android, ios]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run E2E tests (${{ matrix.platform }})
+        run: npx wdio run config/wdio.${{ matrix.platform }}.bs.conf.ts --suite e2e
+
+      - name: Upload Allure results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results-e2e-${{ matrix.platform }}
+          path: allure-results/
+
+  # ────────────────────────────────────────────────────────────────
+  # Allure Report Generation
+  # ────────────────────────────────────────────────────────────────
+  report:
+    name: Generate Test Report
+    runs-on: ubuntu-latest
+    needs: [smoke-tests, regression-tests, e2e-tests]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all Allure results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: allure-results-*
+          merge-multiple: true
+          path: allure-results/
+
+      - name: Generate Allure report
+        uses: simple-elf/allure-report-action@master
+        with:
+          allure_results: allure-results
+          allure_history: allure-history
+
+      - name: Deploy report to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: allure-history
+
+      - name: Post report link
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `📊 **QA Report:** https://${context.repo.owner}.github.io/${context.repo.repo}/`
+            })
